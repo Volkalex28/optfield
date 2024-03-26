@@ -12,7 +12,10 @@ pub fn generate(original: &ItemStruct, args: Args) -> TokenStream {
     opt_struct.vis = args.item.final_visibility();
 
     opt_struct.attrs = attrs::generate(original, &args);
-    opt_struct.fields = fields::generate(original, &args);
+    opt_struct.fields = match fields::generate(original, &args) {
+        Ok(fields) => fields,
+        Err(err) => return err.into_compile_error().into(),
+    };
 
     let merge_impl = merge::generate(original, &opt_struct, &args);
 

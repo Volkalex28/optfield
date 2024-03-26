@@ -1,7 +1,8 @@
 use quote::quote;
-use syn::{parse2, Field, Fields, ItemStruct, Path, Type, TypePath};
+use syn::spanned::Spanned;
+use syn::{parse2, Error, Field, Fields, ItemStruct, Path, Result, Type, TypePath};
 
-use crate::args::Args;
+use crate::args::{self, Args};
 use crate::error::unexpected;
 
 mod attrs;
@@ -9,14 +10,32 @@ mod attrs;
 const OPTION: &str = "Option";
 
 /// Wraps item fields in Option.
-pub fn generate(item: &ItemStruct, args: &Args) -> Fields {
+pub fn generate(item: &ItemStruct, args: &Args) -> Result<Fields> {
     let item_name = item.ident.clone();
 
     let mut fields = item.fields.clone();
 
+    if let Some(args_fields) = args.fields.as_ref() {
+        use syn::{Fields::*, FieldsNamed as FN, FieldsUnnamed as FU};
+        match args_fields {
+            args::Fields::Add(new) => match (&mut fields, new.clone()) {
+                (_, Unit) => {}
+                (fields @ Unit, new) => *fields = new,
+                (Unnamed(FU { unnamed: fds, .. }), new @ Unnamed(_))
+                | (Named(FN { named: fds, .. }), new @ Named(_)) => fds.extend(new.into_iter()),
+                (Named(_), new) => return Err(Error::new(new.span(), "Expected named fields")),
+                (Unnamed(_), new) => return Err(Error::new(new.span(), "Expected unnamed fields")),
+            },
+        }
+    }
+
     for field in fields.iter_mut() {
         field.attrs = attrs::generate(field, args);
         attrs::generate(field, args);
+
+        if let Some(vis) = args.vis.as_ref() {
+            field.vis = vis.clone()
+        }
 
         if is_option(field) && !args.rewrap {
             continue;
@@ -28,15 +47,15 @@ pub fn generate(item: &ItemStruct, args: &Args) -> Fields {
             Option<#ty>
         };
 
-        field.ty = parse2(opt_type).unwrap_or_else(|e| {
-            panic!(
-                "{}",
-                unexpected(format!("generating {} fields", item_name), e)
+        field.ty = parse2(opt_type).map_err(|e| {
+            Error::new(
+                e.span(),
+                unexpected(format!("generating {} fields", item_name), e),
             )
-        });
+        })?;
     }
 
-    fields
+    Ok(fields)
 }
 
 pub fn is_option(field: &Field) -> bool {

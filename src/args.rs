@@ -9,9 +9,11 @@ mod kw {
     syn::custom_keyword!(merge_fn);
     syn::custom_keyword!(rewrap);
     syn::custom_keyword!(attrs);
+    syn::custom_keyword!(fields);
     syn::custom_keyword!(field_doc);
     syn::custom_keyword!(field_attrs);
     syn::custom_keyword!(from);
+    syn::custom_keyword!(vis);
 
     pub mod attrs_sub {
         syn::custom_keyword!(add);
@@ -25,9 +27,11 @@ pub struct Args {
     pub rewrap: bool,
     pub doc: Option<Doc>,
     pub attrs: Option<Attrs>,
+    pub fields: Option<Fields>,
     pub field_doc: bool,
     pub field_attrs: Option<Attrs>,
     pub from: bool,
+    pub vis: Option<Visibility>,
 }
 
 enum Arg {
@@ -35,9 +39,11 @@ enum Arg {
     Doc(Doc),
     Rewrap(bool),
     Attrs(Attrs),
+    Fields(Fields),
     FieldDocs(bool),
     FieldAttrs(Attrs),
     From(bool),
+    Vis(Visibility),
 }
 
 #[cfg_attr(test, derive(PartialEq))]
@@ -74,6 +80,13 @@ pub enum Attrs {
     Add(Vec<Meta>),
 }
 
+#[derive(Clone)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub enum Fields {
+    /// Keep original fields and add the given ones.
+    Add(syn::Fields),
+}
+
 #[derive(Debug)]
 pub struct AttrList(Vec<Meta>);
 
@@ -84,9 +97,11 @@ struct ArgList {
     doc: Option<Span>,
     rewrap: Option<Span>,
     attrs: Option<Span>,
+    fields: Option<Span>,
     field_doc: Option<Span>,
     field_attrs: Option<Span>,
     from: Option<Span>,
+    vis: Option<Span>,
     list: Vec<Arg>,
 }
 
@@ -129,12 +144,16 @@ impl Parse for ArgList {
                 arg_list.parse_rewrap(input)?;
             } else if lookahead.peek(kw::attrs) {
                 arg_list.parse_attrs(input)?;
+            } else if lookahead.peek(kw::fields) {
+                arg_list.parse_fields(input)?;
             } else if lookahead.peek(kw::field_doc) {
                 arg_list.parse_field_doc(input)?;
             } else if lookahead.peek(kw::field_attrs) {
                 arg_list.parse_field_attrs(input)?;
             } else if lookahead.peek(kw::from) {
                 arg_list.parse_from(input)?;
+            } else if lookahead.peek(kw::vis) {
+                arg_list.parse_vis(input)?;
             } else {
                 return Err(lookahead.error());
             }
@@ -152,9 +171,11 @@ impl Args {
             rewrap: false,
             doc: None,
             attrs: None,
+            fields: None,
             field_doc: false,
             field_attrs: None,
             from: false,
+            vis: None,
         }
     }
 }
@@ -167,9 +188,11 @@ impl ArgList {
             doc: None,
             rewrap: None,
             attrs: None,
+            fields: None,
             field_doc: None,
             field_attrs: None,
             from: None,
+            vis: None,
             list: Vec::with_capacity(6),
         }
     }
@@ -178,10 +201,12 @@ impl ArgList {
         input.peek(kw::doc)
             || input.peek(kw::merge_fn)
             || input.peek(kw::rewrap)
+            || input.peek(kw::fields)
             || input.peek(kw::field_doc)
             || input.peek(kw::field_attrs)
             || input.peek(kw::attrs)
             || input.peek(kw::from)
+            || input.peek(kw::vis)
     }
 
     fn parse_doc(&mut self, input: ParseStream) -> Result<()> {
@@ -238,6 +263,40 @@ impl ArgList {
 
         self.attrs = Some(span);
         self.list.push(Arg::Attrs(attrs));
+
+        Ok(())
+    }
+
+    fn parse_fields(&mut self, input: ParseStream) -> Result<()> {
+        if let Some(fields_span) = self.fields {
+            return ArgList::already_defined_error(input, "fields", fields_span);
+        }
+
+        let span = input.span();
+
+        input.parse::<kw::fields>()?;
+        let fields: Fields = input.parse()?;
+
+        self.fields = Some(span);
+        self.list.push(Arg::Fields(fields));
+
+        Ok(())
+    }
+
+    fn parse_vis(&mut self, input: ParseStream) -> Result<()> {
+        if let Some(vis_span) = self.vis {
+            return ArgList::already_defined_error(input, "vis", vis_span);
+        }
+
+        let span = input.span();
+        
+        input.parse::<kw::vis>()?;
+        let content;
+        syn::parenthesized!(content in input);
+        let vis: Visibility = content.parse()?;
+
+        self.vis = Some(span);
+        self.list.push(Arg::Vis(vis));
 
         Ok(())
     }
@@ -391,6 +450,31 @@ impl Parse for Attrs {
     }
 }
 
+impl Parse for Fields {
+    fn parse(input: ParseStream) -> Result<Self> {
+        use Fields::*;
+
+        input.parse::<Eq>()?;
+
+        let lookahead = input.lookahead1();
+        if lookahead.peek(kw::attrs_sub::add) {
+            input.parse::<kw::attrs_sub::add>()?;
+
+            let fields = if input.peek(syn::token::Paren) {
+                syn::Fields::Unnamed(input.parse()?)
+            } else if input.peek(syn::token::Brace) {
+                syn::Fields::Named(input.parse()?)
+            } else {
+                syn::Fields::Unit
+            };
+
+            return Ok(Add(fields));
+        }
+
+        Err(lookahead.error())
+    }
+}
+
 impl Attrs {
     fn parse_attr_list(input: ParseStream) -> Result<Vec<Meta>> {
         let group: Group = input.parse()?;
@@ -429,9 +513,11 @@ impl From<ArgList> for Args {
                 Doc(doc) => args.doc = Some(doc),
                 Rewrap(rewrap) => args.rewrap = rewrap,
                 Attrs(attrs) => args.attrs = Some(attrs),
+                Fields(fields) => args.fields = Some(fields),
                 FieldDocs(field_doc) => args.field_doc = field_doc,
                 FieldAttrs(field_attrs) => args.field_attrs = Some(field_attrs),
                 From(from) => args.from = from,
+                Vis(vis) => args.vis = Some(vis),
             }
         }
 
